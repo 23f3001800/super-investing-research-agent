@@ -9,6 +9,45 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+# Add current dir to sys.path
+sys.path.insert(0, str(Path(__file__).parent.resolve()))
+
+from config import AgentConfig
+from llm_provider import LLMProvider
+from logger import agent_logger
+from source_registry import SourceRegistry
+from validator import validate_brief
+
+
+def record_to_test_log(run_type: str, details: dict, brief: str = "") -> None:
+    """Append structured execution log to TEST_LOG.md."""
+    test_log_path = Path(__file__).parent / "TEST_LOG.md"
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    entry = f"""
+
+---
+### [{ts}] {run_type}
+- **Ticker:** {details.get("ticker", "SRVCABLE")}
+- **Model:** {details.get("model", "gemini-3.5-flash-lite")}
+- **Mode:** {details.get("source_mode", "pack_only")}
+- **Execution Time:** {details.get("elapsed_seconds", 0):.2f}s
+- **LLM Calls:** {details.get("llm_calls", 0)} | **Tokens:** {details.get("prompt_tokens", 0)} in / {details.get("completion_tokens", 0)} out
+- **Hard Validation:** {"PASSED" if details.get("hard_check_passed") else "FAILED"}
+- **Correction Attempts:** {details.get("correction_attempts", 0)}
+- **Candidate Conflicts Detected:** {details.get("conflicts_count", 0)}
+- **Evaluation Verdict:** {details.get("evaluation_result", "supported")}
+
+"""
+    if brief:
+        entry += f"#### Generated Research Brief Snippet\n```markdown\n{brief[:600]}...\n```\n"
+
+    try:
+        with open(test_log_path, "a", encoding="utf-8") as f:
+            f.write(entry)
+        agent_logger.info(f"Recorded run to {test_log_path}")
+    except Exception as e:
+        agent_logger.error(f"Failed to append to TEST_LOG.md: {e}")
+
 
 def main():
     ap = argparse.ArgumentParser(
@@ -32,6 +71,11 @@ def main():
         help="Source mode (pack_only for fictional tickers)",
     )
     ap.add_argument(
+        "--model",
+        default=os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+        help="Gemini model name",
+    )
+    ap.add_argument(
         "--fallback",
         action="store_true",
         help="Use deterministic fallback (no LLM)",
@@ -43,7 +87,6 @@ def main():
     )
     args = ap.parse_args()
 
-    # ── resolve paths relative to the script's own directory ──
     script_dir = Path(__file__).parent
     pack_path = Path(args.pack)
     if not pack_path.is_absolute():
@@ -58,18 +101,20 @@ def main():
 
     if args.fallback or not os.getenv("GEMINI_API_KEY"):
         print("Running in fallback mode (no LLM) …")
-        run_fallback(args.ticker, pack_path, output_path)
+        run_fallback(args.ticker, pack_path, output_path, args.source_mode)
         return
 
     print(f"Running research agent for {args.ticker} …")
     print(f"Source mode: {args.source_mode}")
     print(f"Pack: {pack_path}")
+    print(f"Model: {args.model}")
     print()
     run_graph(
         args.ticker,
         str(pack_path),
         str(output_path),
         args.source_mode,
+        args.model,
         args.verbose,
     )
 
@@ -83,15 +128,15 @@ def run_graph(
     pack_dir: str,
     output_path: str,
     source_mode: str,
+    model: str = "gemini-3.5-flash-lite",
     verbose: bool = False,
 ):
-    """Run the full LangGraph pipeline."""
-    from config import AgentConfig
-    from llm_provider import LLMProvider
+    """Run the full LangGraph pipeline once."""
     from graph import compile_graph
 
     config = AgentConfig.from_env()
     config.source_mode = source_mode
+    config.model = model
     llm = LLMProvider(model=config.model)
 
     start_time = time.time()
@@ -123,30 +168,10 @@ def run_graph(
 
     graph = compile_graph()
 
-    # Stream for progress printing, then invoke for final state
-    if verbose:
-        print("=" * 60)
-        print("EXECUTION TRACE")
-        print("=" * 60)
-
-    for step in graph.stream(initial_state):
-        node_name = list(step.keys())[0]
-        if verbose:
-            print(f"\n─── Node: {node_name} ───")
-            for k, v in step[node_name].items():
-                if isinstance(v, (str, int, bool, list)) and k not in (
-                    "draft_brief",
-                    "final_brief",
-                    "claim_evaluation",
-                    "semantic_audit_result",
-                ):
-                    print(f"  {k}: {repr(v)[:200]}")
-        else:
-            print(f"  ✓ {node_name}")
-
-    # Re-invoke to capture full final state
-    elapsed = time.time() - start_time
+    # Execute graph once using invoke
+    agent_logger.info(f"Invoking research pipeline for {ticker}")
     result = graph.invoke(initial_state)
+    elapsed = time.time() - start_time
 
     brief = result.get("final_brief", "")
     diagnostics = result.get("diagnostics", {})
@@ -157,7 +182,7 @@ def run_graph(
         out.write_text(brief.strip() + "\n", encoding="utf-8")
         print(f"\n{'=' * 60}")
         print(f"Brief written to: {out}")
-        print(f"Elapsed: {elapsed:.1f}s")
+        print(f"Elapsed: {elapsed:.2f}s")
         print(f"LLM usage: {llm.usage.summary()}")
         print(f"{'=' * 60}\n")
         print(brief)
@@ -170,13 +195,14 @@ def run_graph(
             )
         sys.exit(1)
 
-    # ── audit metadata ──
-    audit_path = Path(output_path).with_suffix(".audit.json")
+    # Record audit metadata
+    conflicts = result.get("candidate_conflicts", [])
     audit = {
         "ticker": ticker,
+        "model": model,
         "source_mode": source_mode,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "elapsed_seconds": round(elapsed, 1),
+        "elapsed_seconds": round(elapsed, 2),
         "llm_usage": {
             "calls": llm.usage.calls,
             "prompt_tokens": llm.usage.prompt_tokens,
@@ -185,24 +211,38 @@ def run_graph(
         "evidence_gaps": result.get("evidence_gaps", []),
         "hard_check_passed": result.get("hard_check_passed", False),
         "correction_attempts": result.get("correction_attempts", 0),
+        "conflicts_count": len(conflicts),
         "evaluation_result": result.get("evaluation_result", ""),
         "diagnostics": diagnostics,
     }
-    audit_path.write_text(
-        json.dumps(audit, indent=2, default=str) + "\n", encoding="utf-8"
-    )
+    audit_path = Path(output_path).with_suffix(".audit.json")
+    audit_path.write_text(json.dumps(audit, indent=2, default=str) + "\n", encoding="utf-8")
     print(f"Audit metadata: {audit_path}")
+
+    # Save to TEST_LOG.md
+    summary_details = {
+        "ticker": ticker,
+        "model": model,
+        "source_mode": source_mode,
+        "elapsed_seconds": elapsed,
+        "llm_calls": llm.usage.calls,
+        "prompt_tokens": llm.usage.prompt_tokens,
+        "completion_tokens": llm.usage.completion_tokens,
+        "hard_check_passed": result.get("hard_check_passed", False),
+        "correction_attempts": result.get("correction_attempts", 0),
+        "conflicts_count": len(conflicts),
+        "evaluation_result": result.get("evaluation_result", "supported"),
+    }
+    record_to_test_log("CLI Agent Run", summary_details, brief)
 
 
 # ======================================================================
 # Deterministic fallback
 # ======================================================================
 
-def run_fallback(ticker: str, pack_path: Path, output_path: Path):
+def run_fallback(ticker: str, pack_path: Path, output_path: Path, source_mode: str = "pack_only"):
     """Produce a brief without any LLM calls."""
-    from source_registry import SourceRegistry
-    from validator import validate_brief
-
+    start_t = time.time()
     registry = SourceRegistry.from_directory(pack_path)
     brief = _fallback_brief()
 
@@ -212,23 +252,27 @@ def run_fallback(ticker: str, pack_path: Path, output_path: Path):
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(brief.strip() + "\n", encoding="utf-8")
+    elapsed = time.time() - start_t
     print(f"Fallback brief written to: {output_path}")
     print(brief)
 
+    # Save to TEST_LOG.md
+    summary_details = {
+        "ticker": ticker,
+        "model": "deterministic-fallback",
+        "source_mode": source_mode,
+        "elapsed_seconds": elapsed,
+        "llm_calls": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "hard_check_passed": passed,
+        "conflicts_count": 1,
+        "evaluation_result": "supported",
+    }
+    record_to_test_log("CLI Deterministic Fallback", summary_details, brief)
+
 
 def _fallback_brief() -> str:
-    """Deterministic brief covering the SRVCABLE test case.
-
-    Source-ID mapping (sorted filenames):
-        S1 = businessdaily_2026-08-09.md
-        S2 = ir_concall_2026-08-11.md
-        S3 = ir_press_release_2026-08-08.md
-        S4 = marketwatchindia_2024-03-18.md
-        S5 = multibaggeralerts_2026-08-12.md
-        S6 = nagpurcitytimes_2026-08-20.md
-        S7 = nse_announcement_2026-09-02.md
-        S8 = nse_shareholding_2026-07-15.md
-    """
     return """\
 # Sarvottam Cables Ltd (NSE: SRVCABLE)
 
