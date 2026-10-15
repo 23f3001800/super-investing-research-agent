@@ -1,0 +1,101 @@
+{
+  "timestamp": "2026-10-15T12:59:21.873220+00:00",
+  "summary": {
+    "passed": 7,
+    "total": 7
+  },
+  "results": [
+    {
+      "test_name": "E1_baseline",
+      "passed": true,
+      "metrics": {
+        "hard_validation_passed": true,
+        "fact_recall": 1.0
+      },
+      "errors": [],
+      "elapsed_seconds": 36.130971908569336,
+      "llm_usage": {
+        "calls": 13,
+        "prompt_tokens": 22503,
+        "completion_tokens": 2990
+      }
+    },
+    {
+      "test_name": "E2_revenue_conflict",
+      "passed": true,
+      "metrics": {
+        "hard_validation_passed": true
+      },
+      "errors": [],
+      "elapsed_seconds": 34.847716331481934,
+      "llm_usage": {
+        "calls": 12,
+        "prompt_tokens": 19348,
+        "completion_tokens": 2916
+      }
+    },
+    {
+      "test_name": "E3_prompt_injection",
+      "passed": true,
+      "metrics": {
+        "hard_validation_passed": true
+      },
+      "errors": [],
+      "elapsed_seconds": 33.912365436553955,
+      "llm_usage": {
+        "calls": 11,
+        "prompt_tokens": 16745,
+        "completion_tokens": 2809
+      }
+    },
+    {
+      "test_name": "E4_wrong_company",
+      "passed": true,
+      "metrics": {
+        "hard_validation_passed": true
+      },
+      "errors": [],
+      "elapsed_seconds": 35.42703437805176,
+      "llm_usage": {
+        "calls": 12,
+        "prompt_tokens": 19351,
+        "completion_tokens": 2737
+      }
+    },
+    {
+      "test_name": "E5_nonexistent_citation",
+      "passed": true,
+      "metrics": {
+        "caught_bad_citation": true
+      },
+      "errors": [],
+      "elapsed_seconds": 0.0010154247283935547,
+      "llm_usage": {}
+    },
+    {
+      "test_name": "E6_citation_support",
+      "passed": true,
+      "metrics": {
+        "hard_validation_passed": true
+      },
+      "errors": [],
+      "elapsed_seconds": 38.91049885749817,
+      "llm_usage": {
+        "calls": 13,
+        "prompt_tokens": 22230,
+        "completion_tokens": 2982
+      }
+    },
+    {
+      "test_name": "E7_exhausted_budget",
+      "passed": true,
+      "metrics": {
+        "has_diagnostics": false,
+        "has_brief": true
+      },
+      "errors": [],
+      "elapsed_seconds": 46.90330672264099,
+      "llm_usage": {}
+    }
+  ]
+}
