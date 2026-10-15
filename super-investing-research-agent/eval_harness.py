@@ -168,6 +168,27 @@ def run_eval_suite(pack_dir: str, output_dir: str = "eval_results"):
     report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     print(f"\nDetailed report: {report_path}")
 
+    # Append test suite run results to TEST_LOG.md
+    test_log_path = Path(__file__).parent / "TEST_LOG.md"
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        f"\n\n---\n### [{ts}] Automated Acceptance Test Suite (E1 - E7)",
+        f"- **Total Cases:** {total} | **Passed:** {passed}/{total}",
+        "\n| Test Case | Description | Status | Time | Notes |",
+        "|---|---|---|---|---|",
+    ]
+    for r, tc in zip(results, test_cases):
+        status_badge = "✅ PASS" if r.passed else "❌ FAIL"
+        err_str = "; ".join(r.errors) if r.errors else "All invariants verified"
+        lines.append(f"| `{r.test_name}` | {tc.description} | {status_badge} | {r.elapsed_seconds:.2f}s | {err_str} |")
+
+    try:
+        with open(test_log_path, "a", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        print(f"Results recorded to: {test_log_path}")
+    except Exception as e:
+        print(f"Warning: Could not append to TEST_LOG.md: {e}", file=sys.stderr)
+
 
 def run_single_eval(tc: TestCase) -> EvalResult:
     start = time.time()
